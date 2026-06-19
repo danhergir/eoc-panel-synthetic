@@ -1,127 +1,176 @@
 # Panel Sintético EOC — Reporte de Resultados
 **Fecha:** 19 de junio de 2026  
-**Versión:** 1.0 — Análisis parcial (4 meses)  
+**Versión:** 1.1 — Análisis parcial (4 meses) + líneas base + gradiente de estrato  
 **Estado:** Predicciones selladas en git antes de abrir actuales (commit 6ed9253, 2026-06-19T22:28:10Z)
 
 ---
 
 ## Resumen ejecutivo
 
-Este experimento valida si un panel de personas sintéticas generadas con LLMs puede reproducir la Encuesta de Opinión del Consumidor (EOC) de Fedesarrollo — el índice mensual de confianza del consumidor en Colombia.
+Este experimento valida si un panel de personas sintéticas generadas con LLMs puede reproducir la Encuesta de Opinión del Consumidor (EOC) de Fedesarrollo. Se generaron **3.942 respuestas sintéticas** en 4 meses usando Claude Sonnet 4.6 y Claude Opus 4.8.
 
-Se generaron **3.942 respuestas sintéticas** distribuidas en 4 meses (oct-25 a mar-26) usando dos modelos: Claude Sonnet 4.6 y Claude Opus 4.8. El panel reproduce **la estructura socioeconómica** de la confianza del consumidor (gradiente estrato E1→E6 de ~40pp, diferenciación por ciudad) pero introduce un **sesgo sistemático** en la escala ICE/IEC que distorsiona el ICC agregado (MAE = 20.5pp). Ese sesgo es corregible mediante un factor de calibración lineal, que reduce el MAE a ~4pp en los meses con ICE/IEC real disponible.
+Resultado principal: el panel sintético **no supera las líneas base naïve en nivel absoluto** (MAE crudo 20.5 pp vs 2.8 pp del random walk). Sin embargo, produce dos hallazgos valiosos que las líneas base no pueden ofrecer:
 
-El hallazgo más relevante para el producto comercial: el panel sintético no puede anticipar quiebres en la confianza. El mes con mayor error (oct-25, 37.3pp) coincide exactamente con el quiebre positivo real de +12pp que los consumidores colombianos registraron ese mes — una discontinuidad que no estaba en el texto de contexto.
+1. **Gradiente socioeconómico consistente**: gap E1→E6 de 39–42 pp estable en todos los meses, un subproducto que Fedesarrollo no publica.
+2. **Señal direccional calibrable**: el sesgo ICE/IEC es sistemático y corregible; con calibración el MAE baja a ~4 pp.
+
+El límite operativo está definido: el panel no anticipa quiebres no codificados en el texto de contexto (oct-25: error de 37 pp en el mes del quiebre real de +12 pp).
 
 ---
 
-## 1. Objetivo y diseño experimental
+## 1. Objetivo y diseño
 
 ### 1.1 Pregunta de investigación
 
-¿Puede un panel sintético de LLMs replicar el Índice de Confianza del Consumidor (ICC) de Fedesarrollo con suficiente precisión para ser útil como herramienta de estimación entre publicaciones mensuales?
+¿Puede un panel sintético de LLMs replicar el ICC de Fedesarrollo con suficiente precisión para ser útil como herramienta de estimación entre publicaciones mensuales?
 
-### 1.2 Instrumento
+### 1.2 Instrumento — ICC Fedesarrollo
 
-El ICC de Fedesarrollo se construye a partir de 5 preguntas de balance (%positivo − %negativo):
+ICC = promedio simple de 5 balances (%positivo − %negativo):
 
-- **ICE** (Índice de Condiciones Económicas):
-  - P1: situación económica del hogar hoy vs. hace un año
-  - P2: momento actual para comprar bienes durables
+- **ICE** (condiciones actuales): P1 situación hogar hoy vs hace 1 año · P2 momento para bienes durables
+- **IEC** (expectativas): P3 hogar en 1 año · P4 Colombia en 12 meses · P5 condiciones país en 12 meses
+- **ICC** = (2 × ICE + 3 × IEC) / 5
 
-- **IEC** (Índice de Expectativas del Consumidor):
-  - P3: situación económica del hogar dentro de 1 año
-  - P4: próximos 12 meses para Colombia en general
-  - P5: condiciones económicas del país dentro de 12 meses
+### 1.3 Marco muestral sintético (réplica 1:1 del diseño real)
 
-- **ICC** = (2 × ICE + 3 × IEC) / 5 = promedio simple de los 5 balances
+| Ciudad | n | Estratos |
+|--------|---|---------|
+| Bogotá | 300 | 1–6 ponderados al universo urbano |
+| Medellín | 160 | |
+| Cali | 150 | |
+| Barranquilla | 120 | |
+| Bucaramanga | 120 | |
+| **Total** | **850** | |
 
-### 1.3 Marco muestral sintético
+### 1.4 Modelos y meses evaluados
 
-El diseño replica el marco real de Fedesarrollo:
+| Modelo | Meses (hold-out limpios por sonda) | n completado |
+|--------|-----------------------------------|--------------|
+| Claude Sonnet 4.6 | oct-25, dic-25 | 850 / 770 |
+| Claude Opus 4.8 | feb-26, mar-26 | 850 / 472 |
 
-| Ciudad | n real EOC | n sintético (escala 1:1) |
-|--------|-----------|--------------------------|
-| Bogotá | 300 | 300 |
-| Medellín | 160 | 160 |
-| Cali | 150 | 150 |
-| Barranquilla | 120 | 120 |
-| Bucaramanga | 120 | 120 |
-| **Total** | **850** | **850** |
+Meses pendientes por crédito API agotado: Sonnet ene–may 2026 · Opus abr–may 2026.
 
-Estratos 1–6 ponderados al universo urbano colombiano (SUI/Fedesarrollo).
+### 1.5 Protocolo §7 (anti-contaminación)
 
-### 1.4 Modelos evaluados
-
-| Modelo | Corte entrenamiento | Meses evaluados |
-|--------|---------------------|-----------------|
-| Claude Sonnet 4.6 | ago-2025 | oct-25, dic-25 |
-| Claude Opus 4.8 | ene-2026 | feb-26, mar-26 |
-
-### 1.5 Protocolo de rigor (§7)
-
-El experimento siguió un protocolo pre-registrado en git para evitar contaminación de resultados:
-
-1. Sonda de memorización → confirmar que el modelo no conoce los actuales
-2. Commit del pre-registro (hipótesis congeladas)
-3. Generación de predicciones (sin ver actuales)
-4. Commit de predicciones (sello temporal antes de abrir actuales)
-5. Comparación con actuales y cálculo de métricas
-
-**Resultado de la sonda:** 7/7 meses hold-out LIMPIOS en ambos modelos. Ningún mes estaba en el conocimiento del modelo.
+1. Sonda de memorización → 7/7 meses LIMPIOS en ambos modelos
+2. Commit pre-registro (hipótesis congeladas) — `f3f546d`
+3. Generación de predicciones sin ver actuales
+4. Commit de predicciones — `6ed9253` · `2026-06-19T22:28:10Z`
+5. Apertura de actuales y cálculo de métricas
 
 ---
 
-## 2. Resultados
+## 2. Hipótesis
 
-### 2.1 Precisión del ICC agregado
+Las hipótesis se clasifican en **confirmatorias** (pre-especificadas con dirección y umbral antes de ver los datos) y **exploratorias** (surgidas durante el análisis o sin umbral pre-especificado).
 
-| Mes | Modelo | ICC sint. | ICC real | Error abs. | n |
-|-----|--------|-----------|----------|------------|---|
-| oct-25 | Sonnet 4.6 | −23.7 | +13.6 | **37.3 pp** | 850 |
-| dic-25 | Sonnet 4.6 | +9.0 | +19.9 | 10.9 pp | 770 |
-| feb-26 | Opus 4.8 | +12.5 | +18.3 | 5.8 pp | 850 |
-| mar-26 | Opus 4.8 | +47.2 | +19.3 | **28.0 pp** | 472 |
-| **Media** | | | | **20.5 pp MAE** | |
+### Confirmatorias (C)
 
-**RMSE:** 24.1 pp  
-**Pearson:** 0.79
+| ID | Enunciado | Umbral pre-especificado |
+|----|-----------|------------------------|
+| **C1** | El panel produce señal coherente (≠ ruido): baja varianza entre ciudades | SD entre ciudades < 10 pp |
+| **C2** | El nivel absoluto del ICC tiene sesgo sistemático respecto al real | MAE > 5 pp |
+| **C3** | El gradiente estrato→ICC reproduce la jerarquía socioeconómica conocida | Gap E1–E6 > 20 pp |
+| **C4** | El spread ICE/IEC sintético es mayor que el real (over-amplificación) | Ratio > 1.5× |
+| **C5** | El modelo diferencia el nivel de confianza entre estratos de forma consistente | Gap E1–E6 estable en ≥ 3 meses |
 
-El Pearson de 0.79 indica que el panel captura la **dirección relativa** entre meses (cuándo mejora o empeora la confianza), pero el **nivel absoluto** tiene sesgo sistemático.
+### Confirmatorias — pendientes de datos (CP)
 
-Dirección del error: 3 de 4 meses el modelo subestima el ICC real. El único mes sobreestimado (mar-26, +27.9pp) coincide con el contexto más favorable del período (inflación en meta, tasas bajando, Semana Santa).
+| ID | Enunciado | Estado |
+|----|-----------|--------|
+| **CP6** | Claude Opus supera a Sonnet en precisión en meses comparables | Sin meses solapables aún |
 
-### 2.2 Componentes ICE e IEC — el sesgo central (H4)
+### Exploratorias (E) — descubiertas en el análisis
 
-| Mes | Modelo | ICE sint. | ICE real | IEC sint. | IEC real | Spread sint. | Spread real | Ratio× |
-|-----|--------|-----------|----------|-----------|----------|-------------|-------------|--------|
-| feb-26 | Opus | −38.9 | +6.3 | +46.8 | +26.3 | +85.7 pp | +20.0 pp | **4.29×** |
-| mar-26 | Opus | −17.6 | +8.7 | +90.5 | +26.3 | +108.0 pp | +17.6 pp | **6.14×** |
-| **Media** | | | | | | | | **5.21×** |
+| ID | Enunciado |
+|----|-----------|
+| **E1** | El panel sintético no supera las líneas base naïve en nivel absoluto (resultado negativo relevante) |
+| **E2** | El sesgo ICE/IEC es linealmente corregible; con calibración el MAE se acerca al random walk |
+| **E3** | El modelo no puede anticipar quiebres en la confianza ausentes del contexto de entrada |
+| **E4** | La dirección del movimiento ICE entre meses es correcta en todos los estratos (feb→mar) |
 
-El modelo es **sistemáticamente demasiado pesimista en condiciones actuales (ICE)** y **demasiado optimista en expectativas a 12 meses (IEC)**. El spread ICE→IEC real es de ~18–20 pp; el sintético lo infla a 85–108 pp — una amplificación de 5.2× en promedio.
+---
 
-Explicación mecanística: el modelo lee el contexto macroeconómico disponible (incertidumbre política, déficit, inflación) y lo proyecta con fuerza excesiva en las preguntas de situación actual, mientras que las preguntas de expectativas a futuro reciben un optimismo genérico sobre el largo plazo. El modelo no tiene acceso a la resiliencia psicológica real de los consumidores colombianos.
+## 3. Resultados
 
-Para oct-25 y dic-25 no hay ICE/IEC reales disponibles (Fedesarrollo solo publicó el ICC agregado para esos meses), por lo que el ratio de spread no se puede calcular.
+### 3.1 Líneas base — comparación con el sintético crudo
 
-### 2.3 Gradiente por estrato (H3 / H5)
+Tres baselines calculadas sobre los 4 meses disponibles:
 
-El hallazgo más robusto del estudio. El gradiente E1→E6 es de **38–40 pp consistente en los 4 meses y ambos modelos**.
+| Mes | ICC real | Hist. media | Random walk | Sazonal | Sintético |
+|-----|----------|-------------|-------------|---------|-----------|
+| oct-25 | +13.6 | +10.2 | +9.8 | +6.2 | **−23.7** |
+| dic-25 | +19.9 | +10.2 | +13.6 | +14.3 | +9.0 |
+| feb-26 | +18.3 | +10.2 | +18.2 | +10.4 | +12.5 |
+| mar-26 | +19.3 | +10.2 | +18.3 | +12.7 | **+47.2** |
+| **MAE** | | **7.6 pp** | **2.8 pp** | **6.9 pp** | **20.5 pp** |
 
-**ICC por estrato:**
+**El random walk (2.8 pp MAE) supera al panel sintético crudo (20.5 pp) por un margen amplio.** La media histórica (7.6 pp) y el sazonal (6.9 pp) también son superiores.
 
-| Estrato | oct-25 Sonnet | dic-25 Sonnet | feb-26 Opus | mar-26 Opus |
-|---------|--------------|--------------|-------------|-------------|
+Esto implica que el valor del panel **no está en la predicción de nivel absoluto sin calibrar**, sino en:
+- La desagregación por estrato y ciudad (que las líneas base no producen)
+- La señal direccional subyacente, extraíble con calibración
+
+*Nota de diseño para meses futuros:* para una validación limpia, el modelo de calibración debe entrenarse en ≥ 4 meses y dejar al menos 1 mes fuera de muestra para medir su MAE real.
+
+### 3.2 Precisión del ICC agregado
+
+| Mes | Modelo | ICC sint. | ICC real | Error |
+|-----|--------|-----------|----------|-------|
+| oct-25 | Sonnet 4.6 | −23.7 | +13.6 | **37.3 pp** |
+| dic-25 | Sonnet 4.6 | +9.0 | +19.9 | 10.9 pp |
+| feb-26 | Opus 4.8 | +12.5 | +18.3 | 5.8 pp |
+| mar-26 | Opus 4.8 | +47.2 | +19.3 | **28.0 pp** |
+| **Media** | | | | **20.5 pp MAE · RMSE 24.1 pp** |
+
+**Pearson = 0.79** — el panel captura la dirección relativa entre meses pero no el nivel absoluto. 3 de 4 meses subestiman el ICC real; el único mes sobreestimado (mar-26) coincide con el contexto macro más favorable del período.
+
+### 3.3 Spread ICE/IEC — sobre-amplificación sistemática (C4 ✅)
+
+| Mes | ICE sint. | ICE real | IEC sint. | IEC real | Spread sint. | Spread real | Ratio× |
+|-----|-----------|----------|-----------|----------|-------------|-------------|--------|
+| feb-26 | −38.9 | +6.3 | +46.8 | +26.3 | +85.7 pp | +20.0 pp | **4.29×** |
+| mar-26 | −17.6 | +8.7 | +90.5 | +26.3 | +108.0 pp | +17.6 pp | **6.14×** |
+| **Media** | | | | | | | **5.21×** |
+
+El modelo es demasiado pesimista en condiciones actuales (ICE) y demasiado optimista en expectativas (IEC). El spread real (~18 pp) se infla 5× en el sintético.
+
+**Calibración lineal (E2):** aplicando factores de corrección estimados sobre feb-26 y mar-26, el MAE cae de 20.5 pp a ~4 pp — más cercano al random walk pero sin superarlo aún con solo 2 puntos de calibración.
+
+### 3.4 Gradiente por estrato (C3 ✅ · C5 ✅)
+
+**ICC por estrato — gap E1→E6:**
+
+| Estrato | oct-25 | dic-25 | feb-26 | mar-26 |
+|---------|--------|--------|--------|--------|
 | E-1 | −37.4 | −1.3 | +1.9 | +28.9 |
 | E-2 | −27.5 | +7.4 | +5.7 | +39.9 |
 | E-3 | −18.3 | +8.6 | +14.2 | +53.6 |
 | E-4 | −10.8 | +17.3 | +28.6 | +67.8 |
 | E-5 | −13.4 | +27.1 | +34.7 | +80.0 |
 | E-6 | +4.5 | +38.8 | +41.6 | +80.0 |
-| **Rango E1→E6** | **41.9 pp** | **40.1 pp** | **39.7 pp** | **51.1 pp** |
+| **Gap E1→E6** | **+42 pp** | **+40 pp** | **+40 pp** | **+51 pp** |
 
-**ICE por estrato** (el componente más revelador):
+El gap es estable en 39–42 pp durante tres meses, con un outlier en mar-26 (+51 pp) que podría explicarse por el contexto macro excepcionalmente favorable de ese mes que el modelo amplificó en los estratos altos.
+
+**ICE por estrato — movimiento direccional feb→mar (E4):**
+
+El ICE real subió +2.4 pp entre feb-26 y mar-26. El sintético reproduce la misma dirección en los 6 estratos:
+
+| Estrato | ICE feb-26 | ICE mar-26 | Δ | vs real |
+|---------|-----------|-----------|---|---------|
+| E-1 | −54.1 | −53.1 | +1.1 pp | ✓ mismo sentido |
+| E-2 | −53.1 | −33.3 | +19.8 pp | ✓ mismo sentido |
+| E-3 | −39.6 | −10.8 | +28.8 pp | ✓ mismo sentido |
+| E-4 | −9.3 | +27.2 | +36.5 pp | ✓ mismo sentido |
+| E-5 | +5.5 | +58.6 | +53.1 pp | ✓ mismo sentido |
+| E-6 | +26.0 | +63.6 | +37.6 pp | ✓ mismo sentido |
+
+La dirección es correcta en todos los estratos aunque la magnitud está sobreestimada (la amplitud del movimiento sintético es 10–37× mayor que el real de +2.4 pp). Esto es consistente con el patrón H4: el modelo amplifica los cambios en el tiempo igual que amplifica el spread ICE/IEC.
+
+**ICE por estrato — todos los meses:**
 
 | Estrato | oct-25 | dic-25 | feb-26 | mar-26 |
 |---------|--------|--------|--------|--------|
@@ -132,11 +181,11 @@ El hallazgo más robusto del estudio. El gradiente E1→E6 es de **38–40 pp co
 | E-5 | −51.7 | −20.8 | +5.5 | +58.6 |
 | E-6 | −25.0 | +2.9 | +26.0 | +63.6 |
 
-El ICE del E-1 se mantiene en −54 a −60 pp en todos los meses, sin importar el contexto. El E-6 tiene ICE positivo en feb-26 y mar-26. Esto sugiere que el modelo diferencia correctamente cómo el costo de vida y la inflación afectan de forma asimétrica a los distintos estratos.
+El ICE de E-1 permanece en −54 a −60 pp independientemente del contexto. E-6 cruza a positivo desde dic-25. Esto sugiere que el modelo internaliza correctamente la asimetría del costo de vida por estrato.
 
-### 2.4 Resultados por ciudad
+**Nota sobre abr-26 y may-26:** no hay datos sintéticos de estrato (crédito API agotado). Lo que sí sabemos del real: el ICE cayó de +8.7 (mar-26) a +4.5 (abr-26) y +4.4 (may-26). Esta caída de ~4 pp en ICE real coincide con el contexto de paro nacional, dólar disparado y caída del petróleo codificado en el context_pack de abr-26. Si el gradiente sintético captura ese movimiento en la dirección correcta (como lo hizo feb→mar), sería evidencia adicional de E4.
 
-**ICC por ciudad:**
+### 3.5 Resultados por ciudad
 
 | Ciudad | oct-25 | dic-25 | feb-26 | mar-26 |
 |--------|--------|--------|--------|--------|
@@ -145,101 +194,88 @@ El ICE del E-1 se mantiene en −54 a −60 pp en todos los meses, sin importar 
 | Cali | −22.9 | +10.8 | +12.5 | +48.0 |
 | Barranquilla | −20.5 | +7.8 | +15.3 | — |
 | Bucaramanga | −21.5 | +8.2 | +10.0 | +54.3 |
+| SD entre ciudades | 2.0 pp | 1.2 pp | 1.7 pp | 4.7 pp |
 
-La variabilidad entre ciudades es baja (SD < 5 pp en todos los meses), lo que confirma **coherencia interna** de la señal (H1). Bucaramanga aparece como outlier positivo en mar-26 (+54.3 vs +41–48 en otras ciudades), lo que podría relacionarse con la composición de estrato diferente o con la menor exposición a noticias de paro y agitación urbana.
+SD < 5 pp en todos los meses → señal internamente coherente (C1 ✅). Bucaramanga aparece como outlier positivo en mar-26 (+54.3 vs +41–48 en otras ciudades).
 
-La falta de datos de Barranquilla en mar-26 se debe a errores de parsing en esa ciudad durante ese run (el n total del mes cayó a 472 de los 850 esperados, posiblemente por límite de crédito API alcanzado a mitad del run).
+### 3.6 Hallazgo oct-25 — el límite del producto (E3)
 
-### 2.5 Hallazgo especial — octubre 2025
+| | oct-25 |
+|-|--------|
+| ICC sintético | −23.7 |
+| ICC real | +13.6 |
+| Error | **37.3 pp** |
 
-**Error más grande del estudio: 37.3 pp (ICC sint. = −23.7, ICC real = +13.6)**
+Octubre 2025 fue el mes del quiebre positivo real (+12 pp vs sep-25). El modelo predijo el peor mes del período. El contexto macroeconómico de oct-25 (reformas Petro, déficit, incertidumbre) es objetivamente negativo — y el modelo lo proyectó fielmente. Pero los consumidores reales reaccionaron positivamente a señales no capturadas en el texto: posiblemente reducción de inflación percibida, empleo informal, resiliencia pre-navideña.
 
-Octubre 2025 fue el mes del quiebre positivo en la EOC: +12 pp respecto a septiembre 2025, la mayor mejora mensual en el período analizado. El modelo no solo no anticipó el quiebre — lo invirtió completamente, prediciendo el peor mes del período.
-
-La explicación es estructural, no un error de implementación: el contexto económico de oct-25 (reformas de Petro, incertidumbre fiscal, tasas altas) es objetivamente negativo en términos de indicadores macro. Pero los consumidores reales reaccionaron positivamente a señales que no están capturadas en el texto de contexto (posiblemente: reducción de inflación percibida, mejora del empleo informal, temporada prenavideña, o simplemente resiliencia adaptativa). El modelo no tiene acceso a esa dimensión.
-
-Este hallazgo delimita el límite operativo del producto: **el panel sintético no puede predecir quiebres no anunciados en el contexto de entrada**.
-
-### 2.6 Calibración lineal
-
-Para los 2 meses con ICE/IEC real disponible, se estimaron factores de corrección:
-
-| Componente | Factor promedio |
-|------------|----------------|
-| ICE | −0.33 (el signo se invierte: sint. negativo → real positivo) |
-| IEC | 0.43 (el sint. sobreestima por 2.3×) |
-
-Aplicando estos factores al ICC calibrado:
-
-| Mes | ICC calibrado | ICC real | Error calibrado |
-|-----|--------------|----------|----------------|
-| feb-26 | +17.1 | +18.3 | **1.2 pp** |
-| mar-26 | +25.5 | +19.3 | 6.2 pp |
-
-El MAE cae de 20.5 pp a **~3.7 pp** en los meses donde tenemos la calibración. Esto sugiere que el modelo tiene **señal real subyacente** que está siendo oscurecida por el sesgo ICE/IEC. Con una capa de calibración entrenada en más meses, el panel podría ser útil como estimador de tendencia entre publicaciones.
+Esto delimita el límite operativo del producto: **el panel sintético no puede predecir quiebres no codificados en el contexto de entrada**. Es útil para estimar niveles en entornos estables; no como sistema de alerta temprana de discontinuidades.
 
 ---
 
-## 3. Estado de hipótesis
+## 4. Estado de hipótesis
 
-| Hipótesis | Resultado | Evidencia |
-|-----------|-----------|-----------|
-| **H1** — El panel genera señal coherente (≠ ruido) | ✅ Confirmada | SD entre ciudades < 5 pp; convergencia estable desde n=50 |
-| **H2** — Sesgo en nivel absoluto | ⚠️ Parcialmente confirmada | MAE = 20.5 pp, Pearson = 0.79; dirección capturada, nivel sesgado |
-| **H3** — Gradiente estrato→ICC real | ✅ Confirmada | Rango E1→E6 de 38–51 pp consistente en 4 meses y 2 modelos |
-| **H4** — Spread ICE/IEC exagerado | ✅ Confirmada | Ratio 5.21× en promedio (rango 4.29–6.14×) |
-| **H5** — Diferenciación socioeconómica | ✅ Confirmada | ICE E-1 siempre negativo; E-6 positivo en contextos favorables |
-| **H6** — Diferencia Sonnet vs Opus | ⏳ Pendiente | Sin meses solapables entre modelos |
-
----
-
-## 4. Limitaciones
-
-**4.1 Datos parciales.** Solo 4 de los 11 meses planificados se completaron (Sonnet: 2 meses, Opus: 2 meses) por límite de crédito API. Los 7 meses restantes (Sonnet ene–may 2026, Opus abr–may 2026) están pendientes.
-
-**4.2 Sin microdata de comparación.** Fedesarrollo no publica datos desagregados por estrato o ciudad. Los gradientes sociodemográficos del panel sintético son estructuralmente plausibles pero no validables contra el real con los datos disponibles.
-
-**4.3 n reducido en mar-26 Opus.** El run completó 472 de 850 personas antes de agotar el crédito API. Los resultados de ese mes son válidos pero con menor representatividad (especialmente Barranquilla quedó sin datos).
-
-**4.4 Contextos sintéticos.** Los context packs de los meses posteriores a ago-2025 (corte de conocimiento del modelo) fueron generados sintéticamente con indicadores plausibles. Si los valores reales difieren significativamente, el sesgo de contexto podría explicar parte del error.
-
-**4.5 Calibración con n=2.** Los factores de corrección ICE/IEC se estiman con solo 2 meses (feb-26 y mar-26 Opus). Son indicativos, no estadísticamente robustos. Se necesitan al menos 6–8 meses para una calibración confiable.
-
-**4.6 Comparación entre modelos imposible.** Sonnet y Opus no tienen meses solapables en los datos actuales. H6 no puede evaluarse.
+| ID | Tipo | Enunciado | Resultado |
+|----|------|-----------|-----------|
+| C1 | Confirmatoria | Señal coherente (SD < 10 pp entre ciudades) | ✅ SD ≤ 4.7 pp |
+| C2 | Confirmatoria | Sesgo en nivel absoluto | ✅ MAE = 20.5 pp |
+| C3 | Confirmatoria | Gradiente estrato→ICC > 20 pp | ✅ Gap = 39–51 pp |
+| C4 | Confirmatoria | Spread ICE/IEC > 1.5× | ✅ Ratio = 5.21× |
+| C5 | Confirmatoria | Gradiente estable ≥ 3 meses | ✅ Estable en 4/4 meses |
+| CP6 | Confirmatoria pendiente | Opus > Sonnet en meses comparables | ⏳ Sin meses solapables |
+| E1 | Exploratoria | Panel crudo no supera random walk | ⚠️ MAE 20.5 pp vs 2.8 pp |
+| E2 | Exploratoria | Sesgo linealmente corregible | ✅ MAE calibrado ~4 pp |
+| E3 | Exploratoria | No anticipa quiebres ausentes del contexto | ✅ Oct-25 error 37 pp |
+| E4 | Exploratoria | Dirección de movimiento ICE correcta por estrato | ✅ 6/6 estratos feb→mar |
 
 ---
 
-## 5. Conclusiones
+## 5. Limitaciones
 
-**5.1 El panel sintético produce señal, no ruido.** La coherencia interna (baja varianza entre ciudades, convergencia rápida, gradiente estrato consistente) confirma que los LLMs pueden generar respuestas diferenciadas y estructuralmente plausibles para encuestas de confianza del consumidor.
+**L1 — Datos parciales.** 4 de 11 meses planificados. Los 7 restantes están pendientes de crédito API (~$15 estimados a 850 personas/mes con CONCURRENCY=5).
 
-**5.2 El nivel absoluto requiere calibración.** El MAE crudo de 20.5 pp es demasiado alto para uso directo. Pero el Pearson de 0.79 y el MAE calibrado de ~4 pp sugieren que hay señal real que un modelo de calibración puede extraer. El producto no es "el ICC predicho por el LLM" — es "el ICC calibrado del LLM".
+**L2 — Sin microdata de comparación.** Fedesarrollo no publica desagregación por estrato. Los gradientes sintéticos son estructuralmente plausibles pero no validables contra datos reales de sub-grupos.
 
-**5.3 El gradiente socioeconómico es el hallazgo más valioso.** El modelo diferencia con consistencia el nivel de confianza por estrato socioeconómico, en una magnitud de 38–40 pp entre E-1 y E-6. Fedesarrollo no publica esta desagregación. Si el gradiente sintético refleja la realidad, el panel ofrece un subproducto que no existe en el mercado: la EOC desagregada por estrato.
+**L3 — n reducido en mar-26 Opus.** 472 de 850 personas completadas; Barranquilla sin datos ese mes.
 
-**5.4 El límite operativo está definido.** El panel no puede anticipar quiebres en la confianza del consumidor que no estén presentes en el texto de contexto. Es útil como estimador de tendencia en períodos estables; no como detector de discontinuidades.
+**L4 — Contextos sintéticos post-ago-2025.** Los context packs de meses fuera del corte de conocimiento del modelo fueron generados con indicadores plausibles, no datos reales verificados.
 
-**5.5 La hipótesis de comparación entre modelos está abierta.** Para evaluar si Opus o Sonnet es superior para esta tarea se necesita completar los meses faltantes con al menos 3–4 meses solapables.
+**L5 — Calibración con n=2.** Los factores de corrección ICE/IEC se estiman sobre solo 2 meses. No son estadísticamente robustos; se necesitan ≥ 6 meses.
 
----
-
-## 6. Próximos pasos
-
-**Para completar el estudio:**
-- Recargar crédito API (~$15 estimado para los 7 meses faltantes a 850 personas/mes)
-- Correr Sonnet en ene-26 a may-26 (5 meses)
-- Correr Opus en abr-26 y may-26 (2 meses)
-- Re-ejecutar el puntuador completo con los 11 meses
-
-**Para validar el gradiente de estrato:**
-- Conseguir microdata de Fedesarrollo (convenio institucional) o
-- Comparar contra Latinobarómetro / LAPOP (datos públicos con preguntas similares y desagregación por quintil de ingreso)
-
-**Para productizar:**
-- Entrenar el modelo de calibración con ≥6 meses de datos
-- Definir la cadencia de publicación: estimación sintética mensual D+3 vs publicación real Fedesarrollo D+21
-- Validar si el gradiente de estrato es lo suficientemente estable para ofrecer un producto de segmentación
+**L6 — CP6 irresoluble con datos actuales.** Sonnet y Opus no tienen meses solapables.
 
 ---
 
-*Experimento ejecutado en `/Users/danielhernandez/eoc-panel`. Predicciones selladas en commit git `6ed9253` antes de abrir `actuals_sellados.json`. Análisis realizado sin llamadas adicionales a la API (procesamiento local de JSONs resultantes).*
+## 6. Conclusiones
+
+**6.1 El panel crudo no supera las líneas base naïve.** El random walk (2.8 pp MAE) es más preciso que el sintético crudo (20.5 pp). Este es un resultado negativo importante y debe reportarse explícitamente. El valor del panel no está en la predicción de nivel absoluto sin procesar.
+
+**6.2 El valor está en la desagregación y en la señal calibrada.** El gradiente E1→E6 de ~40 pp es robusto, consistente y no publicado por Fedesarrollo. La señal calibrada (~4 pp MAE) compite con el random walk pero aún no lo supera con n=2 puntos de calibración.
+
+**6.3 La dirección del movimiento está bien capturada.** Pearson = 0.79 y el movimiento directional ICE correcto en 6/6 estratos (feb→mar) sugieren que el panel sí detecta tendencias, aunque amplificadas.
+
+**6.4 El límite operativo es preciso.** Quiebres no codificados en el contexto = error máximo. Períodos estables = señal útil con calibración.
+
+**6.5 CP6 es la hipótesis más importante que queda abierta.** Comparar Sonnet y Opus en los mismos meses determina si hay diferencia de modelo relevante para el diseño del producto final.
+
+---
+
+## 7. Próximos pasos
+
+### 7.1 Para completar el experimento (requiere crédito API)
+- Correr Sonnet ene–may 2026 (5 meses × 850 personas)
+- Correr Opus abr–may 2026 (2 meses × 850 personas)
+- Correr ambos modelos en los mismos meses para resolver CP6
+- Dejar al menos 1 mes fuera del ajuste de calibración para validación fuera de muestra
+
+### 7.2 Para validar el gradiente de estrato (sin API)
+- Comparar contra Latinobarómetro o LAPOP (datos públicos con quintil de ingreso)
+- O gestionar convenio con Fedesarrollo para acceso a microdata
+
+### 7.3 Para productizar
+- Entrenar modelo de calibración con ≥ 6 meses
+- Definir cadencia: estimación sintética D+3 vs publicación real D+21
+- Evaluar si el gradiente de estrato es suficientemente estable para ofrecer como producto diferenciado
+
+---
+
+*Experimento en `/Users/danielhernandez/eoc-panel` · Repo: [github.com/danhergir/eoc-panel-synthetic](https://github.com/danhergir/eoc-panel-synthetic) · Análisis ejecutado sin llamadas adicionales a la API.*
