@@ -1,0 +1,74 @@
+{
+  "model": "claude-sonnet-4-6",
+  "timestamp": "2026-06-19T21:04:33.230039Z",
+  "contaminated_months": [],
+  "clean_months": [
+    "2025_10",
+    "2025_12",
+    "2026_01",
+    "2026_02",
+    "2026_03",
+    "2026_04",
+    "2026_05"
+  ],
+  "n_contaminated": 0,
+  "n_clean": 7,
+  "details": {
+    "2025_10": {
+      "month": "octubre de 2025",
+      "actual_icc": 13.6,
+      "model_estimate": null,
+      "confianza": "baja",
+      "razonamiento": "No tengo acceso a datos publicados después de mi corte de conocimiento y no puedo verificar el valor exacto del ICC de Fedesarrollo para octubre de 2025.",
+      "status": "LIMPIO"
+    },
+    "2025_12": {
+      "month": "diciembre de 2025",
+      "actual_icc": 19.9,
+      "model_estimate": null,
+      "confianza": "baja",
+      "razonamiento": "No tengo datos del ICC de Fedesarrollo para diciembre de 2025, ya que mi conocimiento no incluye ese dato específico con certeza.",
+      "status": "LIMPIO"
+    },
+    "2026_01": {
+      "month": "enero de 2026",
+      "actual_icc": 18.2,
+      "model_estimate": null,
+      "confianza": "baja",
+      "razonamiento": "No tengo datos del ICC de Fedesarrollo para enero de 2026, ya que mi conocimiento no incluye publicaciones específicas de ese período con certeza verificable.",
+      "status": "LIMPIO"
+    },
+    "2026_02": {
+      "month": "febrero de 2026",
+      "actual_icc": 18.3,
+      "model_estimate": null,
+      "confianza": "baja",
+      "razonamiento": "No tengo datos del ICC de Fedesarrollo para febrero de 2026, ya que mi conocimiento tiene limitaciones en datos económicos específicos de ese período.",
+      "status": "LIMPIO"
+    },
+    "2026_03": {
+      "month": "marzo de 2026",
+      "actual_icc": 19.3,
+      "model_estimate": null,
+      "confianza": "baja",
+      "razonamiento": "No tengo datos del ICC de Fedesarrollo para marzo de 2026, ya que mi conocimiento no incluye publicaciones específicas de ese período con certeza verificable.",
+      "status": "LIMPIO"
+    },
+    "2026_04": {
+      "month": "abril de 2026",
+      "actual_icc": 13.7,
+      "model_estimate": null,
+      "confianza": "baja",
+      "razonamiento": "No tengo datos del ICC de Fedesarrollo para abril de 2026, ya que mi conocimiento no incluye publicaciones de esa fecha con certeza.",
+      "status": "LIMPIO"
+    },
+    "2026_05": {
+      "month": "mayo de 2026",
+      "actual_icc": 17.8,
+      "model_estimate": null,
+      "confianza": "baja",
+      "razonamiento": "Mi conocimiento tiene fecha de corte anterior a mayo de 2026 y no cuento con el dato publicado del ICC de Fedesarrollo para ese mes.",
+      "status": "LIMPIO"
+    }
+  }
+}
