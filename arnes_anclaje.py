@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""Paso 3: Genera el panel sintético de 850 personas y produce el ICC sintético."""
+"""Paso 3: Genera el panel sintético de 850 personas y produce el ICC sintético (async)."""
 
 import argparse
+import asyncio
 import json
 import os
 import random
@@ -19,11 +20,11 @@ CITY_DIST = {
     "Bucaramanga":  120,
 }
 
-STRATA_WEIGHTS    = {1: 0.20, 2: 0.35, 3: 0.25, 4: 0.10, 5: 0.07, 6: 0.03}
-AGE_GROUPS        = ["18-25", "26-35", "36-45", "46-55", "56-65", "65+"]
-AGE_WEIGHTS       = [0.15, 0.22, 0.20, 0.18, 0.15, 0.10]
-EMPLOYMENT        = ["empleado_formal", "empleado_informal", "independiente",
-                     "desempleado", "pensionado", "estudiante"]
+STRATA_WEIGHTS     = {1: 0.20, 2: 0.35, 3: 0.25, 4: 0.10, 5: 0.07, 6: 0.03}
+AGE_GROUPS         = ["18-25", "26-35", "36-45", "46-55", "56-65", "65+"]
+AGE_WEIGHTS        = [0.15, 0.22, 0.20, 0.18, 0.15, 0.10]
+EMPLOYMENT         = ["empleado_formal", "empleado_informal", "independiente",
+                      "desempleado", "pensionado", "estudiante"]
 EMPLOYMENT_WEIGHTS = [0.35, 0.20, 0.25, 0.10, 0.07, 0.03]
 POLITICAL_WEIGHTS  = {"gobierno_petro": 0.30, "oposicion": 0.35, "independiente": 0.35}
 
@@ -65,18 +66,20 @@ VALID = {
     "p5": {"MEJOR": 1, "IGUAL": 0, "PEOR": -1},
 }
 
+CONCURRENCY = 5   # max parallel API calls (conservador para evitar rate limits)
+
 
 def make_persona(city, idx):
     gender = random.choice(["hombre", "mujer"])
     return {
-        "id": f"{city[:3].upper()}_{idx:04d}",
-        "nombre": random.choice(NAMES_M if gender == "hombre" else NAMES_F),
-        "ciudad": city,
+        "id":      f"{city[:3].upper()}_{idx:04d}",
+        "nombre":  random.choice(NAMES_M if gender == "hombre" else NAMES_F),
+        "ciudad":  city,
         "estrato": random.choices(list(STRATA_WEIGHTS), weights=list(STRATA_WEIGHTS.values()))[0],
-        "edad": random.choices(AGE_GROUPS, weights=AGE_WEIGHTS)[0],
-        "empleo": random.choices(EMPLOYMENT, weights=EMPLOYMENT_WEIGHTS)[0],
-        "politica": random.choices(list(POLITICAL_WEIGHTS), weights=list(POLITICAL_WEIGHTS.values()))[0],
-        "genero": gender,
+        "edad":    random.choices(AGE_GROUPS, weights=AGE_WEIGHTS)[0],
+        "empleo":  random.choices(EMPLOYMENT, weights=EMPLOYMENT_WEIGHTS)[0],
+        "politica":random.choices(list(POLITICAL_WEIGHTS), weights=list(POLITICAL_WEIGHTS.values()))[0],
+        "genero":  gender,
     }
 
 
@@ -107,23 +110,110 @@ def calc_icc(responses):
         neg = sum(1 for v in vals if v == -1) / n * 100
         return round(pos - neg, 2)
 
-    b = {f"p{i}": balance(f"p{i}") for i in range(1, 6)}
+    b   = {f"p{i}": balance(f"p{i}") for i in range(1, 6)}
     ice = round((b["p1"] + b["p2"]) / 2, 2)
     iec = round((b["p3"] + b["p4"] + b["p5"]) / 3, 2)
     icc = round((b["p1"] + b["p2"] + b["p3"] + b["p4"] + b["p5"]) / 5, 2)
     return {"icc": icc, "ice": ice, "iec": iec, "balances": b, "n_valid": n, "n_total": len(responses)}
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Arnés de anclaje — panel sintético EOC")
-    parser.add_argument("--model",       required=True)
-    parser.add_argument("--context",     required=True, help="context_pack_YYYY_MM.json")
-    parser.add_argument("--out",         required=True, help="Carpeta de salida")
-    parser.add_argument("--runs",        type=int, default=1)
-    parser.add_argument("--max-personas", type=int, default=850, dest="max_personas")
-    args = parser.parse_args()
+async def survey_persona(client, semaphore, model, persona, month_name, context_text):
+    prompt = SURVEY_PROMPT.format(
+        nombre=persona["nombre"], ciudad=persona["ciudad"], estrato=persona["estrato"],
+        edad=persona["edad"], empleo=persona["empleo"],
+        month_name=month_name, context=context_text,
+    )
+    async with semaphore:
+        for attempt in range(4):
+            try:
+                rsp = await client.messages.create(
+                    model=model, max_tokens=350,
+                    messages=[{"role": "user", "content": prompt}]
+                )
+                scores, nota = parse_survey(rsp.content[0].text)
+                if scores:
+                    scores.update({
+                        "persona_id": persona["id"],
+                        "ciudad":     persona["ciudad"],
+                        "estrato":    persona["estrato"],
+                    })
+                return scores
+            except anthropic.RateLimitError:
+                wait = 2 ** attempt * 5  # 5s, 10s, 20s, 40s
+                print(f"  ⚠ rate limit {persona['id']} — reintentando en {wait}s")
+                await asyncio.sleep(wait)
+            except Exception as e:
+                print(f"  ✗ error {persona['id']}: {type(e).__name__}: {e}")
+                break
+    return None
 
-    client = anthropic.Anthropic()
+
+async def run_one(client, model, month_key, month_name, context_text, personas, run_idx, n_runs):
+    print(f"\n{'='*60}")
+    print(f"Run {run_idx+1}/{n_runs}  |  {model}  |  {month_name}")
+    print(f"{'='*60}")
+
+    semaphore  = asyncio.Semaphore(CONCURRENCY)
+    counter    = {"done": 0}
+    total      = len(personas)
+
+    tasks = [
+        survey_persona(client, semaphore, model, p, month_name, context_text)
+        for p in personas
+    ]
+
+    responses  = []
+    by_city    = {c: [] for c in CITY_DIST}
+    by_strata  = {str(s): [] for s in STRATA_WEIGHTS}
+    done       = 0
+
+    for coro in asyncio.as_completed(tasks):
+        result = await coro
+        done  += 1
+        if result:
+            responses.append(result)
+            by_city.setdefault(result["ciudad"], []).append(result)
+            by_strata.setdefault(str(result["estrato"]), []).append(result)
+
+        if done % 50 == 0 or done == total:
+            m = calc_icc(responses)
+            if m:
+                spread = round(m["iec"] - m["ice"], 1)
+                print(f"  [{done:4d}/{total}]  ICC={m['icc']:>+6.1f}  ICE={m['ice']:>+6.1f}  IEC={m['iec']:>+6.1f}  Spread={spread:>+6.1f}pp  n={m['n_valid']}")
+
+    metrics        = calc_icc(responses)
+    city_metrics   = {c: calc_icc(r) for c, r in by_city.items() if r}
+    strata_metrics = {s: calc_icc(r) for s, r in by_strata.items() if r}
+
+    if metrics:
+        spread = round(metrics["iec"] - metrics["ice"], 1)
+        print(f"\n  FINAL  ICC={metrics['icc']:>+6.1f}  ICE={metrics['ice']:>+6.1f}  IEC={metrics['iec']:>+6.1f}  Spread={spread:>+6.1f}pp  n={metrics['n_valid']}")
+        print(f"\n  Por ciudad:")
+        for city, cm in city_metrics.items():
+            if cm:
+                cs = round(cm["iec"] - cm["ice"], 1)
+                print(f"    {city:<15} ICC={cm['icc']:>+6.1f}  ICE={cm['ice']:>+6.1f}  IEC={cm['iec']:>+6.1f}  Spread={cs:>+5.1f}  n={cm['n_valid']}")
+        print(f"\n  Por estrato:")
+        for s, sm in sorted(strata_metrics.items()):
+            if sm:
+                ss = round(sm["iec"] - sm["ice"], 1)
+                print(f"    E-{s:<8} ICC={sm['icc']:>+6.1f}  ICE={sm['ice']:>+6.1f}  IEC={sm['iec']:>+6.1f}  Spread={ss:>+5.1f}  n={sm['n_valid']}")
+
+    return {
+        "run":        run_idx + 1,
+        "model":      model,
+        "month_key":  month_key,
+        "month_name": month_name,
+        "n_personas": len(personas),
+        "metrics":    metrics,
+        "by_city":    city_metrics,
+        "by_strata":  strata_metrics,
+        "timestamp":  datetime.utcnow().isoformat() + "Z",
+    }
+
+
+async def async_main(args):
+    client = anthropic.AsyncAnthropic()
 
     with open(args.context) as f:
         ctx = json.load(f)
@@ -133,82 +223,36 @@ def main():
     context_text = ctx["context_text"]
 
     os.makedirs(args.out, exist_ok=True)
+
+    scale    = min(args.max_personas, 850) / 850
+    personas = []
+    for city, count in CITY_DIST.items():
+        for i in range(max(1, round(count * scale))):
+            personas.append(make_persona(city, i))
+
     all_runs = []
-
     for run_idx in range(args.runs):
-        print(f"\n{'='*55}")
-        print(f"Run {run_idx+1}/{args.runs}  |  {args.model}  |  {month_name}")
-        print(f"{'='*55}")
-
-        scale = min(args.max_personas, 850) / 850
-        personas = []
-        for city, count in CITY_DIST.items():
-            for i in range(max(1, round(count * scale))):
-                personas.append(make_persona(city, i))
-
-        responses = []
-        by_city   = {c: [] for c in CITY_DIST}
-
-        for i, p in enumerate(personas):
-            prompt = SURVEY_PROMPT.format(
-                nombre=p["nombre"], ciudad=p["ciudad"], estrato=p["estrato"],
-                edad=p["edad"], empleo=p["empleo"],
-                month_name=month_name, context=context_text,
-            )
-            try:
-                rsp = client.messages.create(
-                    model=args.model, max_tokens=350,
-                    messages=[{"role": "user", "content": prompt}]
-                )
-                scores, nota = parse_survey(rsp.content[0].text)
-                if scores:
-                    scores.update({"persona_id": p["id"], "ciudad": p["ciudad"], "estrato": p["estrato"]})
-                    responses.append(scores)
-                    by_city[p["ciudad"]].append(scores)
-                else:
-                    print(f"  [{i+1:4d}] parse error — {p['id']}")
-            except Exception as e:
-                print(f"  [{i+1:4d}] API error: {e}")
-
-            if (i + 1) % 10 == 0:
-                m = calc_icc(responses)
-                if m:
-                    print(f"  [{i+1:4d}/{len(personas)}]  ICC={m['icc']:+.1f}  ICE={m['ice']:+.1f}  IEC={m['iec']:+.1f}  n={m['n_valid']}")
-
-        metrics      = calc_icc(responses)
-        city_metrics = {c: calc_icc(r) for c, r in by_city.items() if r}
-
-        if metrics:
-            print(f"\n  FINAL  ICC={metrics['icc']:+.1f}  ICE={metrics['ice']:+.1f}  IEC={metrics['iec']:+.1f}  n={metrics['n_valid']}")
-
-        all_runs.append({
-            "run": run_idx + 1,
-            "model": args.model,
-            "month_key": month_key,
-            "month_name": month_name,
-            "n_personas": len(personas),
-            "metrics": metrics,
-            "by_city": city_metrics,
-            "timestamp": datetime.utcnow().isoformat() + "Z",
-        })
+        run_data = await run_one(client, args.model, month_key, month_name,
+                                 context_text, personas, run_idx, args.runs)
+        all_runs.append(run_data)
 
     if len(all_runs) > 1:
         iccs = [r["metrics"]["icc"] for r in all_runs if r["metrics"]]
         aggregate = {
             "mean_icc": round(statistics.mean(iccs), 2),
             "std_icc":  round(statistics.stdev(iccs), 2) if len(iccs) > 1 else 0.0,
-            "runs": len(iccs),
+            "runs":     len(iccs),
         }
     else:
         aggregate = all_runs[0]["metrics"] if all_runs else None
 
     output = {
-        "model": args.model,
-        "month_key": month_key,
+        "model":      args.model,
+        "month_key":  month_key,
         "month_name": month_name,
-        "runs": all_runs,
-        "aggregate": aggregate,
-        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "runs":       all_runs,
+        "aggregate":  aggregate,
+        "timestamp":  datetime.utcnow().isoformat() + "Z",
     }
 
     slug    = args.model.replace("-", "_")
@@ -217,6 +261,17 @@ def main():
         json.dump(output, f, indent=2, ensure_ascii=False)
 
     print(f"\nGuardado → {outfile}")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Arnés de anclaje — panel sintético EOC (async)")
+    parser.add_argument("--model",        required=True)
+    parser.add_argument("--context",      required=True)
+    parser.add_argument("--out",          required=True)
+    parser.add_argument("--runs",         type=int, default=1)
+    parser.add_argument("--max-personas", type=int, default=850, dest="max_personas")
+    args = parser.parse_args()
+    asyncio.run(async_main(args))
 
 
 if __name__ == "__main__":
