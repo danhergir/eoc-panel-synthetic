@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Paso 3: Genera el panel sintético de 850 personas y produce el ICC sintético (async)."""
+"""Paso 3: Genera el panel sintético de 850 personas y produce el ICC sintético (async).
+
+Providers:
+  --provider anthropic  (default) usa la API de Anthropic
+  --provider local      usa un servidor OpenAI-compatible local (ej. mlx_lm.server)
+"""
 
 import argparse
 import asyncio
@@ -11,6 +16,7 @@ import statistics
 from datetime import datetime
 from pathlib import Path
 import anthropic
+from openai import AsyncOpenAI
 
 CITY_DIST = {
     "Bogotá":       300,
@@ -66,7 +72,8 @@ VALID = {
     "p5": {"MEJOR": 1, "IGUAL": 0, "PEOR": -1},
 }
 
-CONCURRENCY = 5   # max parallel API calls (conservador para evitar rate limits)
+CONCURRENCY_ANTHROPIC = 5   # conservador para evitar rate limits
+CONCURRENCY_LOCAL     = 1   # mlx_lm corre secuencial en CPU/GPU unificada
 
 
 def make_persona(city, idx):
@@ -117,20 +124,33 @@ def calc_icc(responses):
     return {"icc": icc, "ice": ice, "iec": iec, "balances": b, "n_valid": n, "n_total": len(responses)}
 
 
-async def survey_persona(client, semaphore, model, persona, month_name, context_text):
+async def _call_llm(client, provider, model, prompt):
+    if provider == "anthropic":
+        rsp = await client.messages.create(
+            model=model, max_tokens=350,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        return rsp.content[0].text
+    else:
+        rsp = await client.chat.completions.create(
+            model=model, max_tokens=350,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        return rsp.choices[0].message.content
+
+
+async def survey_persona(client, provider, semaphore, model, persona, month_name, context_text):
     prompt = SURVEY_PROMPT.format(
         nombre=persona["nombre"], ciudad=persona["ciudad"], estrato=persona["estrato"],
         edad=persona["edad"], empleo=persona["empleo"],
         month_name=month_name, context=context_text,
     )
     async with semaphore:
-        for attempt in range(4):
+        max_attempts = 4 if provider == "anthropic" else 2
+        for attempt in range(max_attempts):
             try:
-                rsp = await client.messages.create(
-                    model=model, max_tokens=350,
-                    messages=[{"role": "user", "content": prompt}]
-                )
-                scores, nota = parse_survey(rsp.content[0].text)
+                text   = await _call_llm(client, provider, model, prompt)
+                scores, _ = parse_survey(text)
                 if scores:
                     scores.update({
                         "persona_id": persona["id"],
@@ -139,7 +159,7 @@ async def survey_persona(client, semaphore, model, persona, month_name, context_
                     })
                 return scores
             except anthropic.RateLimitError:
-                wait = 2 ** attempt * 5  # 5s, 10s, 20s, 40s
+                wait = 2 ** attempt * 5
                 print(f"  ⚠ rate limit {persona['id']} — reintentando en {wait}s")
                 await asyncio.sleep(wait)
             except Exception as e:
@@ -148,17 +168,17 @@ async def survey_persona(client, semaphore, model, persona, month_name, context_
     return None
 
 
-async def run_one(client, model, month_key, month_name, context_text, personas, run_idx, n_runs):
+async def run_one(client, provider, model, month_key, month_name, context_text, personas, run_idx, n_runs):
     print(f"\n{'='*60}")
-    print(f"Run {run_idx+1}/{n_runs}  |  {model}  |  {month_name}")
+    print(f"Run {run_idx+1}/{n_runs}  |  {model}  |  {month_name}  |  [{provider}]")
     print(f"{'='*60}")
 
-    semaphore  = asyncio.Semaphore(CONCURRENCY)
-    counter    = {"done": 0}
-    total      = len(personas)
+    concurrency = CONCURRENCY_LOCAL if provider == "local" else CONCURRENCY_ANTHROPIC
+    semaphore   = asyncio.Semaphore(concurrency)
+    total       = len(personas)
 
     tasks = [
-        survey_persona(client, semaphore, model, p, month_name, context_text)
+        survey_persona(client, provider, semaphore, model, p, month_name, context_text)
         for p in personas
     ]
 
@@ -213,7 +233,11 @@ async def run_one(client, model, month_key, month_name, context_text, personas, 
 
 
 async def async_main(args):
-    client = anthropic.AsyncAnthropic()
+    if args.provider == "local":
+        client = AsyncOpenAI(base_url=args.local_url, api_key="local")
+        print(f"  Servidor local: {args.local_url}  modelo: {args.model}")
+    else:
+        client = anthropic.AsyncAnthropic()
 
     with open(args.context) as f:
         ctx = json.load(f)
@@ -232,7 +256,7 @@ async def async_main(args):
 
     all_runs = []
     for run_idx in range(args.runs):
-        run_data = await run_one(client, args.model, month_key, month_name,
+        run_data = await run_one(client, args.provider, args.model, month_key, month_name,
                                  context_text, personas, run_idx, args.runs)
         all_runs.append(run_data)
 
@@ -270,6 +294,8 @@ def main():
     parser.add_argument("--out",          required=True)
     parser.add_argument("--runs",         type=int, default=1)
     parser.add_argument("--max-personas", type=int, default=850, dest="max_personas")
+    parser.add_argument("--provider",     choices=["anthropic", "local"], default="anthropic")
+    parser.add_argument("--local-url",    default="http://127.0.0.1:8080/v1", dest="local_url")
     args = parser.parse_args()
     asyncio.run(async_main(args))
 
